@@ -1,3 +1,15 @@
+/* ************************************************************************** */
+/*                                                                            */
+/*                                                        :::      ::::::::   */
+/*   mini_db.cpp                                        :+:      :+:    :+:   */
+/*                                                    +:+ +:+         +:+     */
+/*   By: tiizuka <tiizuka@student.42tokyo.jp>       +#+  +:+       +#+        */
+/*                                                +#+#+#+#+#+   +#+           */
+/*   Created: 2026/07/22 16:28:29 by tiizuka           #+#    #+#             */
+/*   Updated: 2026/07/22 16:28:38 by tiizuka          ###   ########.fr       */
+/*                                                                            */
+/* ************************************************************************** */
+
 #include <unistd.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -229,8 +241,11 @@ void Server::recv_data(int fd) {
         } else {
             if (errno == EAGAIN || errno == EWOULDBLOCK)
                 break;
-            else
-                exit_with_error("recv");
+            else {
+							// ECONNRESET など、この1クライアントだけの問題として処理する
+							handle_disconnection(fd);
+							return;
+						}
         }
     }
     process_commands(fd);
