@@ -6,7 +6,7 @@
 /*   By: tiizuka <tiizuka@student.42tokyo.jp>       +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/07/22 16:28:29 by tiizuka           #+#    #+#             */
-/*   Updated: 2026/07/22 16:50:32 by tiizuka          ###   ########.fr       */
+/*   Updated: 2026/07/22 17:41:08 by tiizuka          ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -73,9 +73,7 @@ private:
 	Server &operator=(const Server &src);
 };
 
-/////////////////////////////////////////////
 // constructor & destructor
-/////////////////////////////////////////////
 Server::Server(char *port, char *path)
 		: port_(atoi(port)), path_(path), serverFd_(-1), epollFd_(-1)
 {
@@ -94,9 +92,7 @@ Server::~Server()
 		close(serverFd_);
 }
 
-/////////////////////////////////////////////
 // helper
-/////////////////////////////////////////////
 void Server::exit_with_error(const std::string &cause)
 {
 	std::cerr << "Fatal error: " << cause << std::endl;
@@ -109,9 +105,7 @@ void signal_handler(int signum)
 	g_running = 0;
 }
 
-/////////////////////////////////////////////
 // fd
-/////////////////////////////////////////////
 void Server::set_nonblocking(int fd)
 {
 	int flag = fcntl(fd, F_GETFL, 0);
@@ -136,9 +130,7 @@ void Server::unregister_epoll(int fd)
 		exit_with_error("unregister_epoll");
 }
 
-/////////////////////////////////////////////
 // connection
-/////////////////////////////////////////////
 void Server::handle_new_connection()
 {
 	while (1)
@@ -169,9 +161,7 @@ void Server::handle_disconnection(int fd)
 	close(fd);
 }
 
-/////////////////////////////////////////////
 // database
-/////////////////////////////////////////////
 void Server::load_database()
 {
 	std::ifstream ifs(path_);
@@ -202,9 +192,7 @@ void Server::save_database()
 	ofs.close();
 }
 
-/////////////////////////////////////////////
 // recv data & process command
-/////////////////////////////////////////////
 std::vector<std::string> Server::process_tokens(std::string command)
 {
 	std::istringstream iss(command);
@@ -292,9 +280,7 @@ void Server::recv_data(int fd)
 	process_commands(fd);
 }
 
-/////////////////////////////////////////////
 // run
-/////////////////////////////////////////////
 void Server::run()
 {
 	struct epoll_event events[64];
@@ -323,9 +309,7 @@ void Server::run()
 	save_database();
 }
 
-/////////////////////////////////////////////
 // setup
-/////////////////////////////////////////////
 void Server::setup()
 {
 	// handle signal
