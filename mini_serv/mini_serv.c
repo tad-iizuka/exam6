@@ -6,7 +6,7 @@
 /*   By: tiizuka <tiizuka@student.42tokyo.jp>       +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/12/01 13:01:19 by akyoshid          #+#    #+#             */
-/*   Updated: 2026/07/22 16:32:31 by tiizuka          ###   ########.fr       */
+/*   Updated: 2026/07/22 17:24:42 by tiizuka          ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -20,9 +20,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-///////////////////////ß////////////////////////////
 // Global variables
-///////////////////////////////////////////////////
 int g_server_fd;
 int g_max_fd;
 fd_set g_master_fds;
@@ -36,9 +34,7 @@ typedef struct s_database
 t_database g_database[FD_SETSIZE];
 int g_next_id = 0;
 
-///////////////////////////////////////////////////
 // Provided functions
-///////////////////////////////////////////////////
 
 // split buf to (new) buf & msg
 // (old) buf memory will be reused for msg (split by NULL)
@@ -96,9 +92,7 @@ char *str_join(char *buf, char *add)
 	return (newbuf);
 }
 
-///////////////////////////////////////////////////
 // Helper functions
-///////////////////////////////////////////////////
 void print_log(char *str)
 {
 	if (str != NULL)
@@ -128,58 +122,69 @@ void clean_up(void)
 	close(g_server_fd);
 }
 
-void broadcast(int sender_fd, const char *mes)
+void broadcast(int sender_fd, const char *msg)
 {
-	// print_log("broadcast\n");
 	for (int fd = 0; fd <= g_max_fd; ++fd)
 	{
-		if (FD_ISSET(fd, &g_master_fds) && fd != g_server_fd && fd != sender_fd)
-			send(fd, mes, strlen(mes), 0);
+		if (!FD_ISSET(fd, &g_master_fds))
+			continue;
+		if (fd == g_server_fd || fd == sender_fd)
+			continue;
+		send(fd, msg, strlen(msg), 0);
 	}
 }
 
-///////////////////////////////////////////////////
 // Connection
-///////////////////////////////////////////////////
-void handle_new_connection()
+void handle_new_connection(void)
 {
-	// print_log("handle_new_connection\n");
 	int new_fd = accept(g_server_fd, NULL, NULL);
-	if (new_fd >= 0)
+	if (new_fd < 0)
+		return ;
+
+	if (new_fd >= FD_SETSIZE)
 	{
-		// set up
-		FD_SET(new_fd, &g_master_fds);
-		if (g_max_fd < new_fd)
-			g_max_fd = new_fd;
-		g_database[new_fd].id = g_next_id;
-		++g_next_id;
-		g_database[new_fd].buff = NULL;
-		// broadcast
-		char message[64];
-		sprintf(message,
-						"server: client %d just arrived\n", g_database[new_fd].id);
-		broadcast(new_fd, message);
+		close(new_fd);
+		return ;
 	}
+
+	FD_SET(new_fd, &g_master_fds);
+
+	if (new_fd > g_max_fd)
+		g_max_fd = new_fd;
+
+	g_database[new_fd].id = g_next_id++;
+	g_database[new_fd].buff = NULL;
+
+	char message[64];
+	sprintf(message,
+		"server: client %d just arrived\n",
+		g_database[new_fd].id);
+	broadcast(new_fd, message);
 }
 
 void handle_disconnection(int fd)
 {
-	// print_log("handle_disconnection\n");
-	// broadcast
 	char message[64];
-	sprintf(message, "server: client %d just left\n", g_database[fd].id);
+
+	sprintf(message,
+		"server: client %d just left\n",
+		g_database[fd].id);
 	broadcast(fd, message);
-	// clean up
+
 	FD_CLR(fd, &g_master_fds);
-	g_database[fd].id = -1;
+
 	free(g_database[fd].buff);
 	g_database[fd].buff = NULL;
+	g_database[fd].id = -1;
+
 	close(fd);
+
+	while (g_max_fd > g_server_fd
+		&& !FD_ISSET(g_max_fd, &g_master_fds))
+		g_max_fd--;
 }
 
-///////////////////////////////////////////////////
 // Recv data
-///////////////////////////////////////////////////
 void recv_data(int recv_fd)
 {
 	// print_log("recv_data\n");
@@ -208,24 +213,24 @@ void recv_data(int recv_fd)
 
 				char prefix[32];
 				sprintf(prefix, "client %d: ", g_database[recv_fd].id);
-				char *prefix_alloced = str_join(NULL, prefix);
-				if (prefix_alloced == NULL)
+
+				char *message_with_prefix =
+					malloc(strlen(prefix) + strlen(message) + 1);
+
+				if (message_with_prefix == NULL)
 				{
 					free(message);
 					clean_up();
 					fatal_error();
 				}
 
-				char *message_with_prefix = str_join(prefix_alloced, message);
+				strcpy(message_with_prefix, prefix);
+				strcat(message_with_prefix, message);
+
 				free(message);
-				if (message_with_prefix == NULL)
-				{
-					free(prefix_alloced);
-					clean_up();
-					fatal_error();
-				}
 
 				broadcast(recv_fd, message_with_prefix);
+
 				free(message_with_prefix);
 			}
 			else if (ret2 == 0)
@@ -245,12 +250,10 @@ void recv_data(int recv_fd)
 	}
 }
 
-///////////////////////////////////////////////////
 // main
-///////////////////////////////////////////////////
 int main(int argc, char **argv)
 {
-	if (argc < 2)
+	if (argc != 2)
 	{
 		write(2, "Wrong number of arguments\n", 26);
 		return (1);
