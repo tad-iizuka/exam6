@@ -115,7 +115,7 @@ void Server::load_db() {
 		std::istringstream iss(line);
 		std::string key;
 		std::string value;
-		if (ifs >> key >> value)
+		if (iss >> key >> value)
 			_db[key] = value;
 	}
 	ifs.close();
@@ -147,7 +147,7 @@ std::string Server::comd(std::string cmd) {
 		return "0\n";
 	} else if (tks[0] == "GET" && tks.size() == 2) {
 		if (_db.count(tks[1]))
-			return "0" + _db[tks[1]] + "\n";
+			return "0 " + _db[tks[1]] + "\n";
 		else
 			return "1\n";
 	} else if (tks[0] == "DELETE" && tks.size() == 2) {
