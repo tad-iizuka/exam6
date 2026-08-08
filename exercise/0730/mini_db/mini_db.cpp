@@ -195,8 +195,6 @@ void Server::rdata(int fd) {
 int main(int argc, char *argv[]) {
 	if (argc != 3) {
 		std::cerr << "Usage: " << argv[0] << " <port> <path>" << std::endl;
-		// write(2, "Usage: ./a.out <port> <path>\n", 
-		// 	strlen("Usage: ./a.out <port> <path>\n"));
 		return 1;
 	}
 	Server server(argv[1], argv[2]);
