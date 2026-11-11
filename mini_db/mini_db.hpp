@@ -6,7 +6,7 @@
 /*   By: tiizuka <tiizuka@student.42tokyo.jp>       +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/07/22 16:28:29 by tiizuka           #+#    #+#             */
-/*   Updated: 2026/07/22 17:47:47 by tiizuka          ###   ########.fr       */
+/*   Updated: 2026/11/12 08:55:11 by tiizuka          ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -60,8 +60,7 @@ private:
 	void save_database();
 
 	// recv data & process command
-	std::vector<std::string> process_tokens(std::string command);
-	std::string process_command(std::string line);
+	std::string process_command(const std::string &command);
 	void process_commands(int fd);
 	void recv_data(int fd);
 

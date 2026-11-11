@@ -6,7 +6,7 @@
 /*   By: tiizuka <tiizuka@student.42tokyo.jp>       +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/07/22 16:28:29 by tiizuka           #+#    #+#             */
-/*   Updated: 2026/07/22 17:48:09 by tiizuka          ###   ########.fr       */
+/*   Updated: 2026/11/12 08:54:49 by tiizuka          ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -133,47 +133,43 @@ void Server::save_database()
 	ofs.close();
 }
 
-// recv data & process command
-std::vector<std::string> Server::process_tokens(std::string command)
+std::string Server::process_command(const std::string &command)
 {
-	std::istringstream iss(command);
-	std::vector<std::string> tokens;
-	std::string token;
-	while (iss >> token)
-		tokens.push_back(token);
-	return tokens;
-}
+    std::istringstream iss(command);
+    std::string cmd, key, value, extra;
 
-std::string Server::process_command(std::string command)
-{
-	std::vector<std::string> tokens = process_tokens(command);
-	if (tokens.empty())
-	{
-		return "2\n";
-	}
-	else if (tokens[0] == "POST" && tokens.size() == 3)
-	{
-		database_[tokens[1]] = tokens[2];
-		return "0\n";
-	}
-	else if (tokens[0] == "GET" && tokens.size() == 2)
-	{
-		if (database_.count(tokens[1]))
-			return "0 " + database_[tokens[1]] + "\n";
-		else
-			return "1\n";
-	}
-	else if (tokens[0] == "DELETE" && tokens.size() == 2)
-	{
-		if (database_.erase(tokens[1]))
-			return "0\n";
-		else
-			return "1\n";
-	}
-	else
-	{
-		return "2\n";
-	}
+    if (!(iss >> cmd))
+        return "2\n";
+
+    if (cmd == "POST")
+    {
+        if (!(iss >> key >> value) || (iss >> extra))
+            return "2\n";
+        database_[key] = value;
+        return "0\n";
+    }
+
+    if (cmd == "GET")
+    {
+        if (!(iss >> key) || (iss >> extra))
+            return "2\n";
+
+        std::map<std::string, std::string>::const_iterator it =
+            database_.find(key);
+
+        if (it == database_.end())
+            return "1\n";
+        return "0 " + it->second + "\n";
+    }
+
+    if (cmd == "DELETE")
+    {
+        if (!(iss >> key) || (iss >> extra))
+            return "2\n";
+        return database_.erase(key) ? "0\n" : "1\n";
+    }
+
+    return "2\n";
 }
 
 void Server::process_commands(int fd)
