@@ -9,7 +9,7 @@
 typedef struct s_client {
     int id;
     char *in, *out;
-    size_t ni, no, sent;
+    size_t ni, no;
 } t_client;
 
 static t_client c[FD_SETSIZE];
@@ -26,7 +26,7 @@ static void append(char **buf, size_t *len, const char *s, size_t n)
     char *p = realloc(*buf, *len + n + 1);
     if (!p) fatal();
     *buf = p;
-    for (size_t i = 0; i < n; i++) p[*len + i] = s[i];
+    memcpy(p + *len, s, n);
     *len += n;
     p[*len] = 0;
 }
@@ -65,9 +65,8 @@ static void receive_client(int fd)
             start = i + 1;
         }
     if (start) {
+        memmove(c[fd].in, c[fd].in + start, c[fd].ni - start);
         c[fd].ni -= start;
-        for (size_t i = 0; i < c[fd].ni; i++)
-            c[fd].in[i] = c[fd].in[start + i];
         c[fd].in[c[fd].ni] = 0;
     }
 }
@@ -97,7 +96,7 @@ int main(int argc, char **argv)
         for (int fd = 0; fd <= maxfd; fd++)
             if (c[fd].id >= 0) {
                 FD_SET(fd, &rd);
-                if (c[fd].no > c[fd].sent) FD_SET(fd, &wr);
+                if (c[fd].no) FD_SET(fd, &wr);
             }
         if (select(maxfd + 1, &rd, &wr, 0, 0) < 0) continue;
         if (FD_ISSET(server, &rd)) {
@@ -117,16 +116,12 @@ int main(int argc, char **argv)
         for (int fd = 0; fd <= maxfd; fd++) {
             if (c[fd].id < 0) continue;
             if (FD_ISSET(fd, &rd)) receive_client(fd);
-            if (c[fd].id >= 0 && FD_ISSET(fd, &wr) && c[fd].no > c[fd].sent) {
-                int n = send(fd, c[fd].out + c[fd].sent,
-                             c[fd].no - c[fd].sent, MSG_NOSIGNAL);
+            if (c[fd].id >= 0 && FD_ISSET(fd, &wr) && c[fd].no) {
+                int n = send(fd, c[fd].out, c[fd].no, MSG_NOSIGNAL);
                 if (n > 0) {
-                    c[fd].sent += n;
-                    if (c[fd].sent == c[fd].no) {
-                        free(c[fd].out);
-                        c[fd].out = 0;
-                        c[fd].no = c[fd].sent = 0;
-                    }
+                    memmove(c[fd].out, c[fd].out + n, c[fd].no - n);
+                    c[fd].no -= n;
+                    if (!c[fd].no) { free(c[fd].out); c[fd].out = 0; }
                 } else if (n < 0) disconnect_client(fd);
             }
         }

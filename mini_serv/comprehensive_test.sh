@@ -1,213 +1,196 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Ubuntu 22.04 / Python 3. No third-party packages required.
+set -u
+SERVER=${SERVER:-./mini_serv}
+PORT=${PORT:-50000}
+if [[ ! -x "$SERVER" ]]; then echo "Missing executable: $SERVER" >&2; exit 1; fi
+python3 - "$SERVER" "$PORT" <<'PY'
+import os, socket, subprocess, sys, time, select, signal
 
-# 시작 포트 설정 (여기서부터 찾기 시작합니다)
-PORT=50000
-SERVER="./mini_serv"
-PASS_COUNT=0
-FAIL_COUNT=0
-SERVER_PID=""
+binary, first_port = sys.argv[1], int(sys.argv[2])
+passed = failed = 0
+server = None
+clients = []
 
-# ------------------------------------------------------------------
-# 핵심 수정: 빈 포트를 찾을 때까지 시도하는 스마트한 서버 시작 함수
-# ------------------------------------------------------------------
-start_server() {
-    # 이전 프로세스 정리
-    pkill -f "mini_serv" 2>/dev/null
-    sleep 0.2
+def connect(port):
+    s = socket.socket()
+    s.settimeout(3)
+    s.connect(('127.0.0.1', port))
+    clients.append(s)
+    return s
 
-    # 최대 10번까지 포트를 바꿔가며 시도
-    for i in {1..10}; do
-        echo "Attempting to start server on port $PORT..."
-        
-        $SERVER $PORT > /dev/null 2>&1 &
-        SERVER_PID=$!
-        sleep 0.5
+def read_until(s, marker, timeout=4):
+    data = b''
+    deadline = time.monotonic() + timeout
+    while marker not in data:
+        left = deadline - time.monotonic()
+        if left <= 0: raise AssertionError(f'Expected {marker!r}, got {data[-200:]!r}')
+        s.settimeout(left)
+        try: part = s.recv(65536)
+        except socket.timeout: raise AssertionError(f'Expected {marker!r}, got {data[-200:]!r}')
+        if not part: raise AssertionError('Unexpected disconnect')
+        data += part
+    return data
 
-        # 서버가 살아있는지 확인
-        if ps -p $SERVER_PID > /dev/null; then
-            echo "--> Success! Server is running on port $PORT"
-            return 0
-        else
-            # 서버가 죽었다면 (Bind Error), 포트를 1 올리고 다시 시도
-            echo "--> Port $PORT is busy or in TIME_WAIT. Trying next port..."
-            ((PORT++))
-        fi
-    done
+def start():
+    global server
+    for port in range(start.port, start.port + 30):
+        p = subprocess.Popen([binary, str(port)], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.PIPE)
+        time.sleep(.08)
+        if p.poll() is None:
+            server = p
+            start.port = port + 1
+            return port
+        p.stderr.close()
+    raise RuntimeError('Could not start server on an available port')
+start.port = first_port
 
-    # 10번 다 실패하면 에러
-    echo "ERROR: Could not find any free port after 10 attempts."
-    exit 1
-}
+def stop():
+    global server
+    for s in clients:
+        try: s.close()
+        except OSError: pass
+    clients.clear()
+    if server:
+        if server.poll() is None:
+            server.terminate()
+            try: server.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                server.kill(); server.wait()
+        server.stderr.close()
+        server = None
 
-# 서버 종료 함수
-stop_server() {
-    if [ -n "$SERVER_PID" ]; then
-        kill $SERVER_PID 2>/dev/null
-        wait $SERVER_PID 2>/dev/null
-    fi
-    # 현재 사용된 포트에 붙은 nc 프로세스들만 정리
-    pkill -f "nc 127.0.0.1 $PORT" 2>/dev/null
-    rm -f /tmp/test_*.txt
-}
+def test(name, fn):
+    global passed, failed
+    try:
+        port = start()
+        fn(port)
+        if server.poll() is not None: raise AssertionError('Server terminated')
+        passed += 1
+        print(f'PASS: {name} (port {port})', flush=True)
+    except Exception as e:
+        failed += 1
+        print(f'FAIL: {name}: {e}', flush=True)
+    finally:
+        stop()
 
-cleanup() {
-    stop_server
-    echo ""
-    echo "=== Final Summary ==="
-    echo "Passed: $PASS_COUNT"
-    echo "Failed: $FAIL_COUNT"
-    exit 0
-}
+def arrival(p):
+    a = connect(p); b = connect(p)
+    assert b'server: client 1 just arrived\n' in read_until(a, b'just arrived\n')
 
-trap cleanup EXIT INT TERM
+def message(p):
+    a = connect(p); b = connect(p)
+    read_until(a, b'just arrived\n')
+    b.sendall(b'Hello from sender\n')
+    assert b'client 1: Hello from sender\n' in read_until(a, b'Hello from sender\n')
 
-echo "=== Comprehensive Test Suite (Auto-Port Selection) ==="
-echo "The script will automatically find a free port for each test."
-echo ""
+def departure(p):
+    a = connect(p); b = connect(p)
+    read_until(a, b'just arrived\n')
+    b.close(); clients.remove(b)
+    assert b'server: client 1 just left\n' in read_until(a, b'just left\n')
 
-# ----------------------------------------------------------------
-# Test 1: Two clients connection notification
-# ----------------------------------------------------------------
-start_server # <--- 여기서 알아서 포트를 결정함
-echo "=== Test 1: Two clients - connection notifications (Port $PORT) ==="
-# Client 0 (Observer) 접속
-nc 127.0.0.1 $PORT > /tmp/test1_c1.txt 2>&1 &
-CLIENT1_PID=$!
-sleep 1
-# Client 1 (Newcomer) 접속
-nc 127.0.0.1 $PORT > /tmp/test1_c2.txt 2>&1 &
-CLIENT2_PID=$!
-sleep 2
+def partial(p):
+    a = connect(p); b = connect(p)
+    read_until(a, b'just arrived\n')
+    b.sendall(b'Hel'); time.sleep(.1); b.sendall(b'lo\n')
+    assert b'client 1: Hello\n' in read_until(a, b'Hello\n')
 
-if grep -q "server: client 1 just arrived" /tmp/test1_c1.txt 2>/dev/null; then
-    echo "✓ PASS: Client 0 received notification about Client 1"
-    ((PASS_COUNT++))
-else
-    echo "✗ FAIL: Connection notifications"
-    echo "--- Client 0 output ---"
-    cat /tmp/test1_c1.txt 2>/dev/null
-    ((FAIL_COUNT++))
-fi
-stop_server
-((PORT++)) # 다음 테스트를 위해 기본적으로 하나 증가시켜 둠
-sleep 1
+def multiline(p):
+    a = connect(p); b = connect(p)
+    read_until(a, b'just arrived\n')
+    b.sendall(b'Line 1\nLine 2\nLine 3\n')
+    got = read_until(a, b'client 1: Line 3\n')
+    for i in range(1, 4): assert got.count(f'client 1: Line {i}\n'.encode()) == 1
 
-# ----------------------------------------------------------------
-# Test 2: Message broadcasting
-# ----------------------------------------------------------------
-start_server
-echo "=== Test 2: Message broadcasting (Port $PORT) ==="
-# 1. Receiver (Client 0) 접속
-nc 127.0.0.1 $PORT > /tmp/test2_receiver.txt 2>&1 &
-RECEIVER_PID=$!
-sleep 1
+def slow(p):
+    # The slow client does not read until after a substantial backlog is queued.
+    slow = connect(p)
+    slow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    fast = connect(p)
+    read_until(slow, b'just arrived\n')
+    sender = connect(p)
+    read_until(fast, b'just arrived\n')
+    # Drain the fast reader concurrently while sender generates a backlog.
+    import threading
+    got = bytearray()
+    errors = []
+    def drain():
+        try:
+            fast.settimeout(15)
+            while b'client 2: END_MARKER\n' not in got:
+                chunk = fast.recv(65536)
+                if not chunk: raise AssertionError('Fast client disconnected')
+                got.extend(chunk)
+        except Exception as e: errors.append(e)
+    worker = threading.Thread(target=drain, daemon=True)
+    worker.start()
+    payload = b'X' * 1024 + b'\n'
+    for _ in range(1024): sender.sendall(payload)
+    sender.sendall(b'END_MARKER\n')
+    worker.join(timeout=15)
+    if worker.is_alive() or errors: raise AssertionError(f'Fast client stalled: {errors}')
+    assert got.count(b'client 2: ' + payload) == 1024, 'Fast client lost/duplicated data'
+    assert server.poll() is None, 'Server exited while slow client was not reading'
+    # Check the slow client is still connected by consuming the start of its backlog.
+    slow.settimeout(5)
+    assert slow.recv(4096), 'Slow client was disconnected'
 
-# 2. Sender (Client 1) 접속
-(echo "Hello from sender"; sleep 1) | nc 127.0.0.1 $PORT > /tmp/test2_sender.txt 2>&1 &
-SENDER_PID=$!
-sleep 2
+def slow_full_delivery(p):
+    # Pause the receiver, then verify every byte is eventually delivered.
+    receiver = connect(p)
+    sender = connect(p)
+    read_until(receiver, b'just arrived\n')
+    payload = b'Q' * 1024 + b'\n'
+    expected = b'client 1: ' + payload
+    count = 256
+    for _ in range(count): sender.sendall(payload)
+    sender.sendall(b'END_FULL\n')
+    time.sleep(.4)
+    assert server.poll() is None, 'Server stopped while receiver was idle'
+    data = read_until(receiver, b'client 1: END_FULL\n', timeout=30)
+    assert data == expected * count + b'client 1: END_FULL\n', \
+        f'Data corrupted: received {len(data)} bytes'
 
-if grep -q "client 1: Hello from sender" /tmp/test2_receiver.txt 2>/dev/null; then
-    echo "✓ PASS: Message broadcasting"
-    ((PASS_COUNT++))
-else
-    echo "✗ FAIL: Message broadcasting"
-    echo "Receiver content:"
-    cat /tmp/test2_receiver.txt 2>/dev/null
-    ((FAIL_COUNT++))
-fi
-stop_server
-((PORT++))
-sleep 1
+def resources(p):
+    # Linux-only /proc checks: FD count and VmRSS after 150 connect/disconnect cycles.
+    observer = connect(p)
+    proc = f'/proc/{server.pid}'
+    if not os.path.isdir(proc): raise AssertionError('Requires Linux /proc')
+    def fdcount(): return len(os.listdir(proc + '/fd'))
+    def rss():
+        with open(proc + '/status') as f:
+            for line in f:
+                if line.startswith('VmRSS:'): return int(line.split()[1])
+        raise AssertionError('VmRSS unavailable')
+    base_fd, base_rss = fdcount(), rss()
+    for i in range(150):
+        s = connect(p)
+        read_until(observer, b'just arrived\n')
+        s.sendall(b'test\n')
+        read_until(observer, b': test\n')
+        s.close(); clients.remove(s)
+        read_until(observer, b'just left\n')
+    time.sleep(.2)
+    end_fd, end_rss = fdcount(), rss()
+    assert end_fd <= base_fd + 2, f'FD growth: {base_fd} -> {end_fd}'
+    assert end_rss - base_rss < 8192, f'RSS grew {end_rss - base_rss} KB'
+    print(f'  FD: {base_fd} -> {end_fd}; RSS: {base_rss} -> {end_rss} KB')
 
-# ----------------------------------------------------------------
-# Test 3: Disconnect notification
-# ----------------------------------------------------------------
-start_server
-echo "=== Test 3: Disconnect notification (Port $PORT) ==="
-# Client 0
-nc 127.0.0.1 $PORT > /tmp/test3_c1.txt 2>&1 &
-CLIENT1_PID=$!
-sleep 1
-# Client 1
-nc 127.0.0.1 $PORT > /tmp/test3_c2.txt 2>&1 &
-CLIENT2_PID=$!
-sleep 1
-
-# Client 1 종료
-kill $CLIENT2_PID 2>/dev/null
-wait $CLIENT2_PID 2>/dev/null
-sleep 2
-
-if grep -q "server: client 1 just left" /tmp/test3_c1.txt 2>/dev/null; then
-    echo "✓ PASS: Disconnect notification"
-    ((PASS_COUNT++))
-else
-    echo "✗ FAIL: Disconnect notification"
-    echo "Client 0 received:"
-    cat /tmp/test3_c1.txt 2>/dev/null
-    ((FAIL_COUNT++))
-fi
-stop_server
-((PORT++))
-sleep 1
-
-# ----------------------------------------------------------------
-# Test 4: Partial message
-# ----------------------------------------------------------------
-start_server
-echo "=== Test 4: Partial message handling (Port $PORT) ==="
-# Receiver
-nc 127.0.0.1 $PORT > /tmp/test4_receiver.txt 2>&1 &
-RECEIVER_PID=$!
-sleep 1
-
-# Sender (Split)
-(
-    echo -n "Hel"
-    sleep 0.3
-    echo "lo"
-    sleep 1
-) | nc 127.0.0.1 $PORT > /tmp/test4_sender.txt 2>&1 &
-SENDER_PID=$!
-sleep 2
-
-if grep -q "client 1: Hello" /tmp/test4_receiver.txt 2>/dev/null; then
-    echo "✓ PASS: Partial message handling"
-    ((PASS_COUNT++))
-else
-    echo "✗ FAIL: Partial message handling"
-    echo "Receiver received:"
-    cat /tmp/test4_receiver.txt 2>/dev/null
-    ((FAIL_COUNT++))
-fi
-stop_server
-((PORT++))
-sleep 1
-
-# ----------------------------------------------------------------
-# Test 5: Multiple lines
-# ----------------------------------------------------------------
-start_server
-echo "=== Test 5: Multiple lines in one message (Port $PORT) ==="
-# Receiver
-nc 127.0.0.1 $PORT > /tmp/test5_receiver.txt 2>&1 &
-RECEIVER_PID=$!
-sleep 1
-
-# Sender (Multi-line)
-(printf "Line 1\nLine 2\nLine 3\n"; sleep 1) | nc 127.0.0.1 $PORT > /tmp/test5_sender.txt 2>&1 &
-SENDER_PID=$!
-sleep 2
-
-LINES=$(grep -c "client 1: Line" /tmp/test5_receiver.txt 2>/dev/null || echo "0")
-if [ "$LINES" -ge 3 ]; then
-    echo "✓ PASS: Multiple lines handling ($LINES lines)"
-    ((PASS_COUNT++))
-else
-    echo "✗ FAIL: Multiple lines handling (got $LINES lines, expected 3)"
-    echo "Receiver received:"
-    cat /tmp/test5_receiver.txt 2>/dev/null
-    ((FAIL_COUNT++))
-fi
-stop_server
+try:
+    print('=== mini_serv comprehensive tests (Ubuntu / Python 3) ===', flush=True)
+    for name, fn in [('Connection notification', arrival),
+                     ('Message broadcast', message),
+                     ('Disconnect notification', departure),
+                     ('Partial message', partial),
+                     ('Multiple lines', multiline),
+                     ('Slow reader + 1 MiB broadcast', slow),
+                      ('Paused reader full delivery (256 KiB)', slow_full_delivery),
+                     ('FD/RSS stability (150 cycles)', resources)]:
+        test(name, fn)
+finally:
+    stop()
+print(f'\nPassed: {passed}  Failed: {failed}', flush=True)
+sys.exit(1 if failed else 0)
+PY
