@@ -1,313 +1,126 @@
-/* ************************************************************************** */
-/*                                                                            */
-/*                                                        :::      ::::::::   */
-/*   mini_serv.c                                        :+:      :+:    :+:   */
-/*                                                    +:+ +:+         +:+     */
-/*   By: tiizuka <tiizuka@student.42tokyo.jp>       +#+  +:+       +#+        */
-/*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2025/12/01 13:01:19 by akyoshid          #+#    #+#             */
-/*   Updated: 2026/07/22 17:24:42 by tiizuka          ###   ########.fr       */
-/*                                                                            */
-/* ************************************************************************** */
-
-#include <errno.h>
-#include <string.h>
 #include <unistd.h>
-#include <netdb.h>
-#include <sys/select.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <stdlib.h>
-#include <stdio.h>
+#include <sys/select.h>
 
-// Global variables
-int g_server_fd;
-int g_max_fd;
-fd_set g_master_fds;
-
-typedef struct s_database
-{
+typedef struct s_client {
 	int id;
-	char *buff;
-} t_database;
+	char *in, *out;
+	size_t ni, no;
+} t_client;
 
-t_database g_database[FD_SETSIZE];
-int g_next_id = 0;
+static t_client c[FD_SETSIZE];
+static int server, maxfd, nextid;
 
-// Provided functions
-
-// split buf to (new) buf & msg
-// (old) buf memory will be reused for msg (split by NULL)
-// (new)buf & msg should be freed after this function
-int extract_message(char **buf, char **msg)
-{
-	char *newbuf;
-	int i;
-
-	*msg = 0;
-	if (*buf == 0)
-		return (0);
-	i = 0;
-	while ((*buf)[i])
-	{
-		if ((*buf)[i] == '\n')
-		{
-			newbuf = calloc(1, sizeof(*newbuf) * (strlen(*buf + i + 1) + 1));
-			if (newbuf == 0)
-				return (-1);
-			strcpy(newbuf, *buf + i + 1);
-			*msg = *buf;
-			(*msg)[i + 1] = 0;
-			*buf = newbuf;
-			return (1);
-		}
-		i++;
-	}
-	return (0);
-}
-
-// Return new string (buf + add)
-// New string must be freed after this function
-// buf will be freed by this function
-// add will not be freed by this function
-// buf can be NULL
-// add can't be NULL
-char *str_join(char *buf, char *add)
-{
-	char *newbuf;
-	int len;
-
-	if (buf == 0)
-		len = 0;
-	else
-		len = strlen(buf);
-	newbuf = malloc(sizeof(*newbuf) * (len + strlen(add) + 1));
-	if (newbuf == 0)
-		return (0);
-	newbuf[0] = 0;
-	if (buf != 0)
-		strcat(newbuf, buf);
-	free(buf);
-	strcat(newbuf, add);
-	return (newbuf);
-}
-
-// Helper functions
-void print_log(char *str)
-{
-	if (str != NULL)
-		write(2, str, strlen(str));
-}
-
-void fatal_error(void)
-{
+static void fatal(void) {
 	write(2, "Fatal error\n", 12);
 	exit(1);
 }
 
-void clean_up(void)
-{
-	for (int fd = 0; fd <= g_max_fd; ++fd)
-	{
-		if (FD_ISSET(fd, &g_master_fds) && fd != g_server_fd)
-		{
-			FD_CLR(fd, &g_master_fds);
-			g_database[fd].id = -1;
-			free(g_database[fd].buff);
-			g_database[fd].buff = NULL;
-			close(fd);
-		}
-	}
-	FD_ZERO(&g_master_fds);
-	close(g_server_fd);
+static void append(char **buf, size_t *len, const char *s, size_t n) {
+	char *p = realloc(*buf, *len + n + 1);
+	if (!p) fatal();
+	*buf = p;
+	memcpy(p + *len, s, n);
+	*len += n;
+	p[*len] = 0;
 }
 
-void broadcast(int sender_fd, const char *msg)
-{
-	for (int fd = 0; fd <= g_max_fd; ++fd)
-	{
-		if (!FD_ISSET(fd, &g_master_fds))
-			continue;
-		if (fd == g_server_fd || fd == sender_fd)
-			continue;
-		send(fd, msg, strlen(msg), 0);
-	}
+static void broadcast(int from, const char *s, size_t n) {
+	for (int fd = 0; fd <= maxfd; fd++)
+		if (fd != from && c[fd].id >= 0)
+			append(&c[fd].out, &c[fd].no, s, n);
 }
 
-// Connection
-void handle_new_connection(void)
-{
-	int new_fd = accept(g_server_fd, NULL, NULL);
-	if (new_fd < 0)
-		return ;
-
-	if (new_fd >= FD_SETSIZE)
-	{
-		close(new_fd);
-		return ;
-	}
-
-	FD_SET(new_fd, &g_master_fds);
-
-	if (new_fd > g_max_fd)
-		g_max_fd = new_fd;
-
-	g_database[new_fd].id = g_next_id++;
-	g_database[new_fd].buff = NULL;
-
-	char message[64];
-	sprintf(message,
-		"server: client %d just arrived\n",
-		g_database[new_fd].id);
-	broadcast(new_fd, message);
-}
-
-void handle_disconnection(int fd)
-{
-	char message[64];
-
-	sprintf(message,
-		"server: client %d just left\n",
-		g_database[fd].id);
-	broadcast(fd, message);
-
-	FD_CLR(fd, &g_master_fds);
-
-	free(g_database[fd].buff);
-	g_database[fd].buff = NULL;
-	g_database[fd].id = -1;
+static void disconnect_client(int fd) {
+	char msg[80];
+	int id = c[fd].id;
 
 	close(fd);
-
-	while (g_max_fd > g_server_fd
-		&& !FD_ISSET(g_max_fd, &g_master_fds))
-		g_max_fd--;
+	free(c[fd].in);
+	free(c[fd].out);
+	c[fd] = (t_client){.id = -1};
+	int n = sprintf(msg, "server: client %d just left\n", id);
+	broadcast(fd, msg, n);
 }
 
-// Recv data
-void recv_data(int recv_fd)
-{
-	// print_log("recv_data\n");
-	char data[4096];
-	int ret1 = recv(recv_fd, data, sizeof(data) - 1, 0);
-	if (ret1 > 0)
-	{
-		data[ret1] = '\0';
+static void receive_client(int fd) {
+	char buf[4096], prefix[64];
+	int n = recv(fd, buf, sizeof(buf), 0);
 
-		// join buff + data
-		char *joined_str = str_join(g_database[recv_fd].buff, data);
-		if (joined_str == NULL)
-		{
-			clean_up();
-			fatal_error();
+	if (n <= 0) { disconnect_client(fd); return; }
+	append(&c[fd].in, &c[fd].ni, buf, n);
+	size_t start = 0;
+	for (size_t i = 0; i < c[fd].ni; i++)
+		if (c[fd].in[i] == '\n') {
+			int k = sprintf(prefix, "client %d: ", c[fd].id);
+			broadcast(fd, prefix, k);
+			broadcast(fd, c[fd].in + start, i - start + 1);
+			start = i + 1;
 		}
-		g_database[recv_fd].buff = joined_str;
-
-		// extract message
-		char *message;
-		while (1)
-		{
-			int ret2 = extract_message(&g_database[recv_fd].buff, &message);
-			if (ret2 > 0)
-			{
-
-				char prefix[32];
-				sprintf(prefix, "client %d: ", g_database[recv_fd].id);
-
-				char *message_with_prefix =
-					malloc(strlen(prefix) + strlen(message) + 1);
-
-				if (message_with_prefix == NULL)
-				{
-					free(message);
-					clean_up();
-					fatal_error();
-				}
-
-				strcpy(message_with_prefix, prefix);
-				strcat(message_with_prefix, message);
-
-				free(message);
-
-				broadcast(recv_fd, message_with_prefix);
-
-				free(message_with_prefix);
-			}
-			else if (ret2 == 0)
-			{
-				break;
-			}
-			else
-			{
-				clean_up();
-				fatal_error();
-			}
-		}
-	}
-	else if (ret1 <= 0)
-	{
-		handle_disconnection(recv_fd);
+	if (start) {
+		memmove(c[fd].in, c[fd].in + start, c[fd].ni - start);
+		c[fd].ni -= start;
+		c[fd].in[c[fd].ni] = 0;
 	}
 }
 
-// main
-int main(int argc, char **argv)
-{
-	if (argc != 2)
-	{
-		write(2, "Wrong number of arguments\n", 26);
-		return (1);
-	}
-
-	g_server_fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (g_server_fd < 0)
-		fatal_error();
-
+int main(int argc, char **argv) {
 	struct sockaddr_in addr;
-	bzero(&addr, sizeof(addr));
+	fd_set rd, wr;
+
+	if (argc != 2) {
+		write(2, "Wrong number of arguments\n", 26);
+		return 1;
+	}
+	for (int i = 0; i < FD_SETSIZE; i++) c[i].id = -1;
+	server = socket(AF_INET, SOCK_STREAM, 0);
+	if (server < 0 || server >= FD_SETSIZE) fatal();
+	memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	addr.sin_addr.s_addr = htonl(0x7f000001);
 	addr.sin_port = htons(atoi(argv[1]));
-	if (bind(g_server_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
-	{
-		close(g_server_fd);
-		fatal_error();
-	}
-
-	if (listen(g_server_fd, 128) < 0)
-	{
-		close(g_server_fd);
-		fatal_error();
-	}
-
-	FD_ZERO(&g_master_fds);
-	FD_SET(g_server_fd, &g_master_fds);
-	g_max_fd = g_server_fd;
-
-	while (1)
-	{
-		fd_set read_fds = g_master_fds;
-		int ret = select(g_max_fd + 1, &read_fds, NULL, NULL, NULL);
-		if (ret > 0)
-		{
-			for (int fd = 0; fd <= g_max_fd; ++fd)
-			{
-				if (FD_ISSET(fd, &read_fds))
-				{
-					if (fd == g_server_fd)
-						handle_new_connection();
-					else
-						recv_data(fd);
+	if (bind(server, (void *)&addr, sizeof(addr)) < 0 || listen(server, 128) < 0)
+		fatal();
+	maxfd = server;
+	while (1) {
+		FD_ZERO(&rd);
+		FD_ZERO(&wr);
+		FD_SET(server, &rd);
+		for (int fd = 0; fd <= maxfd; fd++)
+			if (c[fd].id >= 0) {
+				FD_SET(fd, &rd);
+				if (c[fd].no) FD_SET(fd, &wr);
+			}
+		if (select(maxfd + 1, &rd, &wr, 0, 0) < 0) continue;
+		if (FD_ISSET(server, &rd)) {
+			int fd = accept(server, 0, 0);
+			if (fd >= 0) {
+				if (fd >= FD_SETSIZE) close(fd);
+				else {
+					char msg[80];
+					int id = nextid++;
+					int n = sprintf(msg, "server: client %d just arrived\n", id);
+					broadcast(fd, msg, n);
+					c[fd] = (t_client){.id = id};
+					if (fd > maxfd) maxfd = fd;
 				}
 			}
 		}
-		else if (ret < 0)
-		{
-			if (errno == EINTR)
-				continue;
-			clean_up();
-			fatal_error();
+		for (int fd = 0; fd <= maxfd; fd++) {
+			if (c[fd].id < 0) continue;
+			if (FD_ISSET(fd, &rd)) receive_client(fd);
+			if (c[fd].id >= 0 && FD_ISSET(fd, &wr) && c[fd].no) {
+				int n = send(fd, c[fd].out, c[fd].no, MSG_NOSIGNAL);
+				if (n > 0) {
+					memmove(c[fd].out, c[fd].out + n, c[fd].no - n);
+					c[fd].no -= n;
+					if (!c[fd].no) { free(c[fd].out); c[fd].out = 0; }
+				} else if (n < 0) disconnect_client(fd);
+			}
 		}
 	}
-	return (0);
 }
