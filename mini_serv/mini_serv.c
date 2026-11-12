@@ -24,7 +24,8 @@ static void append(char **buf, size_t *len, const char *s, size_t n) {
 	char *p = realloc(*buf, *len + n + 1);
 	if (!p) fatal();
 	*buf = p;
-	memcpy(p + *len, s, n);
+	for (size_t i = 0; i < n; i++)
+		p[*len + i] = s[i];
 	*len += n;
 	p[*len] = 0;
 }
@@ -62,7 +63,8 @@ static void receive_client(int fd) {
 			start = i + 1;
 		}
 	if (start) {
-		memmove(c[fd].in, c[fd].in + start, c[fd].ni - start);
+		for (size_t i = 0; i < c[fd].ni - start; i++)
+			c[fd].in[i] = c[fd].in[start + i];
 		c[fd].ni -= start;
 		c[fd].in[c[fd].ni] = 0;
 	}
@@ -116,7 +118,8 @@ int main(int argc, char **argv) {
 			if (c[fd].id >= 0 && FD_ISSET(fd, &wr) && c[fd].no) {
 				int n = send(fd, c[fd].out, c[fd].no, MSG_NOSIGNAL);
 				if (n > 0) {
-					memmove(c[fd].out, c[fd].out + n, c[fd].no - n);
+					for (size_t i = 0; i < c[fd].no - (size_t)n; i++)
+						c[fd].out[i] = c[fd].out[n + i];
 					c[fd].no -= n;
 					if (!c[fd].no) { free(c[fd].out); c[fd].out = 0; }
 				} else if (n < 0) disconnect_client(fd);
