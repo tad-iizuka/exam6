@@ -1,54 +1,32 @@
-/* ************************************************************************** */
-/*                                                                            */
-/*                                                        :::      ::::::::   */
-/*   mini_db.cpp                                        :+:      :+:    :+:   */
-/*                                                    +:+ +:+         +:+     */
-/*   By: tiizuka <tiizuka@student.42tokyo.jp>       +#+  +:+       +#+        */
-/*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2026/07/22 16:28:29 by tiizuka           #+#    #+#             */
-/*   Updated: 2026/11/12 08:54:49 by tiizuka          ###   ########.fr       */
-/*                                                                            */
-/* ************************************************************************** */
-
 #include "mini_db.hpp"
 
 volatile sig_atomic_t g_running = 1;
 
-// constructor & destructor
 Server::Server(char *port, char *path)
-		: port_(atoi(port)), path_(path), serverFd_(-1), epollFd_(-1)
-{
-}
+		: port_(atoi(port)), path_(path), serverFd_(-1), epollFd_(-1) {}
 
-Server::~Server()
-{
+Server::~Server() {
 	if (epollFd_ != -1)
 		close(epollFd_);
 	for (std::map<int, std::string>::iterator it = clients_.begin();
-			 it != clients_.end(); ++it)
-	{
+			 it != clients_.end(); ++it) {
 		close(it->first);
 	}
 	if (serverFd_ != -1)
 		close(serverFd_);
 }
 
-// helper
-void Server::exit_with_error(const std::string &cause)
-{
+void Server::exit_with_error(const std::string &cause) {
 	std::cerr << "Fatal error: " << cause << std::endl;
 	exit(1);
 }
 
-void signal_handler(int signum)
-{
+void signal_handler(int signum) {
 	(void)signum;
 	g_running = 0;
 }
 
-// fd
-void Server::set_nonblocking(int fd)
-{
+void Server::set_nonblocking(int fd) {
 	int flag = fcntl(fd, F_GETFL, 0);
 	if (flag < 0)
 		exit_with_error("fcntl");
@@ -56,8 +34,7 @@ void Server::set_nonblocking(int fd)
 		exit_with_error("fcntl");
 }
 
-void Server::register_epoll(int fd)
-{
+void Server::register_epoll(int fd) {
 	struct epoll_event ev;
 	ev.events = EPOLLIN;
 	ev.data.fd = fd;
@@ -65,27 +42,20 @@ void Server::register_epoll(int fd)
 		exit_with_error("register_epoll");
 }
 
-void Server::unregister_epoll(int fd)
-{
+void Server::unregister_epoll(int fd) {
 	if (epoll_ctl(epollFd_, EPOLL_CTL_DEL, fd, NULL) < 0)
 		exit_with_error("unregister_epoll");
 }
 
-// connection
-void Server::handle_new_connection()
-{
-	while (1)
-	{
+void Server::handle_new_connection() {
+	while (1) {
 		int client_fd = accept(serverFd_, NULL, NULL);
-		if (client_fd >= 0)
-		{
+		if (client_fd >= 0) {
 			set_nonblocking(client_fd);
 			register_epoll(client_fd);
 			clients_[client_fd] = "";
-			// std::cerr << "DEBUG: connect: fd " << client_fd << std::endl;
 		}
-		else
-		{
+		else {
 			if (errno == EAGAIN || errno == EWOULDBLOCK)
 				return;
 			else
@@ -94,23 +64,18 @@ void Server::handle_new_connection()
 	}
 }
 
-void Server::handle_disconnection(int fd)
-{
-	// std::cerr << "DEBUG: disconnect: fd " << fd << std::endl;
+void Server::handle_disconnection(int fd) {
 	clients_.erase(fd);
 	unregister_epoll(fd);
 	close(fd);
 }
 
-// database
-void Server::load_database()
-{
+void Server::load_database() {
 	std::ifstream ifs(path_);
 	if (!ifs.is_open())
 		return;
 	std::string line;
-	while (std::getline(ifs, line))
-	{
+	while (std::getline(ifs, line)) {
 		std::istringstream iss(line);
 		std::string key;
 		std::string value;
@@ -120,64 +85,50 @@ void Server::load_database()
 	ifs.close();
 }
 
-void Server::save_database()
-{
+void Server::save_database() {
 	std::ofstream ofs(path_);
 	if (!ofs.is_open())
 		exit_with_error("ofs");
 	for (std::map<std::string, std::string>::iterator it = database_.begin();
-			 it != database_.end(); ++it)
-	{
+			 it != database_.end(); ++it) {
 		ofs << it->first << " " << it->second << "\n";
 	}
 	ofs.close();
 }
 
-std::string Server::process_command(const std::string &command)
-{
+std::string Server::process_command(const std::string &command) {
     std::istringstream iss(command);
     std::string cmd, key, value, extra;
 
     if (!(iss >> cmd))
         return "2\n";
-
-    if (cmd == "POST")
-    {
+    if (cmd == "POST") {
         if (!(iss >> key >> value) || (iss >> extra))
             return "2\n";
         database_[key] = value;
         return "0\n";
     }
-
-    if (cmd == "GET")
-    {
+    if (cmd == "GET") {
         if (!(iss >> key) || (iss >> extra))
             return "2\n";
-
         std::map<std::string, std::string>::const_iterator it =
             database_.find(key);
-
         if (it == database_.end())
             return "1\n";
         return "0 " + it->second + "\n";
     }
-
-    if (cmd == "DELETE")
-    {
+    if (cmd == "DELETE") {
         if (!(iss >> key) || (iss >> extra))
             return "2\n";
         return database_.erase(key) ? "0\n" : "1\n";
     }
-
     return "2\n";
 }
 
-void Server::process_commands(int fd)
-{
+void Server::process_commands(int fd) {
 	std::string &buff = clients_[fd];
 	size_t pos;
-	while ((pos = buff.find('\n')) != std::string::npos)
-	{
+	while ((pos = buff.find('\n')) != std::string::npos) {
 		std::string command = buff.substr(0, pos);
 		buff.erase(0, pos + 1);
 		std::string response = process_command(command);
@@ -188,27 +139,20 @@ void Server::process_commands(int fd)
 void Server::recv_data(int fd)
 {
 	char buff[1024];
-	while (1)
-	{
+	while (1) {
 		int bytes = recv(fd, buff, sizeof(buff) - 1, 0);
-		if (bytes > 0)
-		{
+		if (bytes > 0) {
 			buff[bytes] = '\0';
 			clients_[fd] += buff;
-			// std::cerr << "DEBUG: recv: fd " << fd << ": " << buff;
 		}
-		else if (bytes == 0)
-		{
+		else if (bytes == 0) {
 			handle_disconnection(fd);
 			return;
 		}
-		else
-		{
+		else {
 			if (errno == EAGAIN || errno == EWOULDBLOCK)
 				break;
-			else
-			{
-				// ECONNRESET など、この1クライアントだけの問題として処理する
+			else {
 				handle_disconnection(fd);
 				return;
 			}
@@ -217,59 +161,45 @@ void Server::recv_data(int fd)
 	process_commands(fd);
 }
 
-// run
 void Server::run()
 {
 	struct epoll_event events[64];
-	while (g_running)
-	{
+	while (g_running) {
 		int ret = epoll_wait(epollFd_, events, 64, -1);
-		if (ret > 0)
-		{
-			for (int i = 0; i < ret; ++i)
-			{
+		if (ret > 0) {
+			for (int i = 0; i < ret; ++i) {
 				if (events[i].data.fd == serverFd_)
 					handle_new_connection();
 				else
 					recv_data(events[i].data.fd);
 			}
 		}
-		else if (ret < 0)
-		{
+		else if (ret < 0) {
 			if (errno == EINTR)
 				continue;
 			else
 				exit_with_error("epoll_wait");
 		}
 	}
-	// reach here by SIGINT
 	save_database();
 }
 
-// setup
-void Server::setup()
-{
-	// handle signal
+void Server::setup() {
 	signal(SIGINT, signal_handler);
 	signal(SIGPIPE, SIG_IGN);
 
-	// load database
 	load_database();
 
-	// create server socket
 	serverFd_ = socket(AF_INET, SOCK_STREAM, 0);
 	if (serverFd_ < 0)
 		exit_with_error("socket");
 
-	// setsockopt
 	int opt = 1;
 	if (setsockopt(serverFd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
 		exit_with_error("setsockopt");
 
-	// set_nonblocking
 	set_nonblocking(serverFd_);
 
-	// bind
 	struct sockaddr_in addr;
 	bzero(&addr, sizeof(addr));
 	addr.sin_family = AF_INET;
@@ -278,16 +208,13 @@ void Server::setup()
 	if (bind(serverFd_, (struct sockaddr *)&addr, sizeof(addr)) < 0)
 		exit_with_error("bind");
 
-	// listen
 	if (listen(serverFd_, 128) < 0)
 		exit_with_error("listen");
 
-	// epoll_create
 	epollFd_ = epoll_create1(0);
 	if (epollFd_ < 0)
 		exit_with_error("epoll_create1");
 
-	// register epoll
 	register_epoll(serverFd_);
 
 	std::cout << "ready" << std::endl;
@@ -295,8 +222,7 @@ void Server::setup()
 
 int main(int argc, char **argv)
 {
-	if (argc < 3)
-	{
+	if (argc < 3) {
 		write(2, "Usage: ./a.out <port> <path>\n", 29);
 		return 1;
 	}
