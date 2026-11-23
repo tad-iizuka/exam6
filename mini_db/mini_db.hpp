@@ -19,37 +19,40 @@
 extern volatile sig_atomic_t g_running;
 void signal_handler(int signum);
 
-class Server {
+class Server
+{
 public:
-    Server(char *port, char *path);
-    ~Server();
-    void setup();
-    void run();
-private:
-    struct Client {
-        std::string in;
-        std::string out;
-        size_t sent;
-        Client() : sent(0) {}
-    };
-    int port_;
-    char *path_;
-    int server;
-    std::map<int, Client> clients_;
-    std::map<std::string, std::string> database_;
+	Server(char *port, char *path);
+	~Server();
+	void setup();
+	void run();
 
-    void exit_with_error(const std::string &cause);
-    void set_nonblocking(int fd);
-    void handle_new_connection();
-    void handle_disconnection(int fd);
-    void load_database();
-    void save_database();
-    std::string process_command(const std::string &command);
-    void process_commands(int fd);
-    void recv_data(int fd);
-    void send_data(int fd);
-    Server();
-    Server(const Server &src);
-    Server &operator=(const Server &src);
+private:
+	struct Client
+	{
+		std::string in;
+		std::string out;
+		size_t sent;
+		Client() : sent(0) {}
+	};
+	int port_;
+	char *path_;
+	int server;
+	std::map<int, Client> clients_;
+	std::map<std::string, std::string> database_;
+
+	void exit_with_error(const std::string &cause);
+	void set_nonblocking(int fd);
+	void handle_new_connection();
+	void handle_disconnection(int fd);
+	void load_database();
+	void save_database();
+	std::string process_command(const std::string &command);
+	void process_commands(int fd);
+	void recv_data(int fd);
+	void send_data(int fd);
+	Server();
+	Server(const Server &src);
+	Server &operator=(const Server &src);
 };
 #endif
