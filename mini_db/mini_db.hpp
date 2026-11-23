@@ -1,18 +1,23 @@
+#ifndef MINI_DB_HPP
+#define MINI_DB_HPP
+
 #include <unistd.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <arpa/inet.h>
-#include <sys/epoll.h>
 #include <fcntl.h>
 #include <strings.h>
 #include <stdlib.h>
 #include <signal.h>
-
+#include <cerrno>
 #include <string>
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <map>
-#include <vector>
+
+extern volatile sig_atomic_t g_running;
+void signal_handler(int signum);
 
 class Server
 {
@@ -23,30 +28,31 @@ public:
 	void run();
 
 private:
+	struct Client
+	{
+		std::string input;
+		std::string output;
+		size_t sent;
+		Client() : sent(0) {}
+	};
 	int port_;
 	char *path_;
 	int serverFd_;
-	int epollFd_;
-	std::map<int, std::string> clients_;
+	std::map<int, Client> clients_;
 	std::map<std::string, std::string> database_;
 
 	void exit_with_error(const std::string &cause);
-
 	void set_nonblocking(int fd);
-	void register_epoll(int fd);
-	void unregister_epoll(int fd);
-
 	void handle_new_connection();
 	void handle_disconnection(int fd);
-
 	void load_database();
 	void save_database();
-
 	std::string process_command(const std::string &command);
 	void process_commands(int fd);
 	void recv_data(int fd);
-
+	void send_data(int fd);
 	Server();
 	Server(const Server &src);
 	Server &operator=(const Server &src);
 };
+#endif
